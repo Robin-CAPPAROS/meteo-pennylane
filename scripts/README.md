@@ -33,15 +33,44 @@ manque ou si le Top 10 est vide.
 
 ## Collecte (via le serveur MCP Pennylane)
 
-Il n'existe pas d'endpoint agrégé au niveau cabinet : tout est **par dossier**.
+Un seul endpoint suffit : `getCRMFlowCompanies` (via `run_operations`), celui qui
+alimente la page « Mon cabinet > Production ». Il renvoie tout le portefeuille.
 
-| Donnée | Appel | Champ |
-|---|---|---|
-| Liste des dossiers + collaborateur | `list_firm_file` (paginé, 100/page) | `name`, `accountant` |
-| Transactions à réconcilier | `getScopeCountsCompanyAccountantsTransactions` | `accounting_needed_count` |
-| Factures fournisseurs à saisir | `getScopeCountsV2...CashBasedAccountingInvoices` `direction=supplier` | `unmatched_count` |
-| Factures clients à saisir | idem, `direction=customer` | `unmatched_count` |
-| Connexion bancaire | `getCompanyAccountConnections` | `connection_status != "connected"` |
+```
+run_operations  operation_id=getCRMFlowCompanies
+                query_params={"page": N, "per_page": 100, "current_fiscal_year": true}
+```
+
+`per_page` est **plafonné à 50** côté serveur même si on demande 100 : il faut donc
+16 pages pour 776 dossiers. Boucler jusqu'à `pagination.hasNextPage == false`, et
+vérifier que le nombre de dossiers collectés égale `pagination.totalEntries` — c'est
+le garde-fou contre une page manquante silencieuse. Les réponses sont volumineuses
+(~140 000 caractères par page) : elles sont écrites sur disque par le harnais, à
+agréger en Python plutôt qu'à lire en contexte.
+
+Ne pas passer par les endpoints par dossier (`getScopeCounts...`) : il en faudrait
+environ 3 100 par exécution, soit plus de deux heures, pour le même résultat.
+
+### Périmètre
+
+`file_type == "accounting"` correspond exactement à « tenue complète » : 716
+dossiers sur 776 au 25/08/2026, les autres étant `revision` ou `null`.
+
+### Mapping des champs
+
+| Donnée de la page | Champ |
+|---|---|
+| Raison sociale | `name` |
+| Collaborateur | `accountant.full_name` |
+| Transactions à réconcilier | `transactions.pending` |
+| Factures fournisseurs à saisir | `supplier_invoices.pending` |
+| Factures clients à saisir | `customer_invoices.pending` |
+| Connexion bancaire déconnectée | `bank_accounts.disconnected_count > 0` |
+
+`pending` vaut `entry + validation_needed` : c'est le total à traiter, et c'est la
+colonne « Transac. » / « Fact. frs » / « Fact. clts » de l'export XLSX du cabinet.
+Vérifié le 25/08/2026 contre la page validée : 716 dossiers, 89 banques
+déconnectées et 1 098 factures clients retrouvés à l'identique.
 
 ## Règle de sécurité
 
